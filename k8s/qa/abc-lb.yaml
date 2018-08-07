@@ -1,0 +1,23 @@
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: abc-ingress
+  annotations:
+    kubernetes.io/ingress.global-static-ip-name: abc-qa
+spec:
+  tls:
+  - secretName: tls
+  backend:
+    serviceName: abc-frontend
+    servicePort: 80
+  loadBalancerIP: x.x.x.x
+  loadBalancerSourceRanges:
+  - x.x.x.x/32
+  - x.x.x.x/32
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 80
+  selector:
+    app: abc
+  type: LoadBalancer

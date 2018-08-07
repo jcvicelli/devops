@@ -1,0 +1,111 @@
+node {
+  try{
+
+    def project = 'abc-xyz'
+    def appName = 'abc'
+    def feSvcName = "${appName}-frontend"
+    def imageTag = "gcr.io/${project}/${appName}:${env.BRANCH_NAME}.${env.BUILD_NUMBER}"
+
+    notifyStarted()
+
+    checkout scm
+
+    stage('Build Code'){
+        sh '''#!/usr/bin/env bash
+                curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.33.4/install.sh | bash
+                export NVM_DIR="$HOME/.nvm"
+                [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+                nvm install 8.9.4
+                nvm use --delete-prefix v8.9.4
+
+
+                npm install
+
+                echo "################### Running tests############"
+                npm run test:auto
+
+                if [ $? -ne 0 ]
+                then
+                    echo "Tests Failed! Exiting..."
+                    exit 1
+                fi
+                npm run build
+        '''
+
+    }
+
+    stage('Build image'){
+        sh("docker build -t ${imageTag} .")
+    }
+
+    stage('Run tests'){
+        sh("echo 'test ok' ")
+    }
+
+    stage('Push image to registry'){
+        switch (env.BRANCH_NAME) {
+            case "qa":
+                sh("gcloud docker -- push ${imageTag}")
+                break
+            case "master":
+                sh("gcloud docker -- push ${imageTag}")
+                break
+            default:
+                break
+        }
+    }
+
+    stage('Deploy Application'){
+        switch (env.BRANCH_NAME) {
+            case "qa":
+                // Create namespace if it doesn't exist
+                //sh("kubectl get ns ${env.BRANCH_NAME} || kubectl create ns ${env.BRANCH_NAME}")
+                // Change deployed image to the one we just built
+                sh("sed -i.bak 's#gcr.io/abc-xyz/abc#${imageTag}#' ./k8s/qa/*.yaml")
+                sh("kubectl --namespace=${env.BRANCH_NAME} apply -f k8s/services/")
+                sh("kubectl --namespace=${env.BRANCH_NAME} apply -f k8s/qa/")
+                //sh("echo http://`kubectl --namespace=develop get service/${feSvcName} --output=json | jq -r '.status.loadBalancer.ingress[0].ip'` > ${feSvcName}")
+                break
+            // Roll out to production
+            case "master":
+                // Create namespace if it doesn't exist
+                //sh("kubectl get ns production || kubectl create ns production")
+                // Change deployed image to the one we just built
+                sh("sed -i.bak 's#gcr.io/abc-xyz/abc#${imageTag}#' ./k8s/prod/*.yaml")
+                sh("kubectl --namespace=production apply -f k8s/services/")
+                sh("kubectl --namespace=production apply -f k8s/prod/")
+                //sh("echo http://`kubectl --namespace=production get service/${feSvcName} --output=json | jq -r '.status.loadBalancer.ingress[0].ip'` > ${feSvcName}")
+                break
+
+            // Only deploys dev and master
+            default:
+                break
+        }
+        notifySuccessful()
+    }
+
+   } catch (e) {
+    currentBuild.result = "FAILED"
+    notifyFailed()
+    throw e
+  }
+
+}
+
+def notifyStarted() {
+  // send to Slack
+  slackSend (color: '#FFFF00', message: "STARTED: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' (${env.BUILD_URL})")
+
+}
+
+def notifySuccessful() {
+  // send to Slack
+  slackSend (color: '#00FF00', message: "SUCCESSFUL: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' (${env.BUILD_URL})")
+
+}
+
+def notifyFailed() {
+  // send to Slack
+  slackSend (color: '#FF0000', message: "FAILED: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' (${env.BUILD_URL})")
+
+}

@@ -1,0 +1,15 @@
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: abc-frontend
+spec:
+  type: NodePort
+  ports:
+  - name: abc
+    port: 80
+    targetPort: 9001
+    protocol: TCP
+  selector:
+    app: abc
+    role: abc
