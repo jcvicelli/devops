@@ -1,0 +1,189 @@
+node {
+    try{
+
+        checkout scm
+
+        switch (env.BRANCH_NAME) {
+            case ~/ABCDE-.*/:
+                stage('Cloudformation Stack'){
+
+                    notifyStarted()
+                  
+
+
+                    cloudformationStack()
+
+                    //wait 10 minues for stack to be up
+                    sh("sleep 10m")
+                    notifySuccessful()
+
+                }
+
+
+
+                stage('Update Jira'){
+                    jiraAddComment site: 'abctest', idOrKey: env.BRANCH_NAME, comment: "Stack deployed to AWS. You can access at ${env.NEW_DNS}"
+                }
+
+                break
+            case "stage":
+                stage('Cloudformation Stack'){
+
+                    notifyStarted()
+
+
+
+                    //cloudformationStack()
+                    //wait 10 minues for stack to be up
+                    sh("sleep 10m")
+                    //notifySuccessful()
+
+                }
+
+                stage('Test Stack'){
+                     notifySuccessful()
+                }
+
+                break
+            case "sandbox":
+                stage('Cloudformation Stack'){
+
+                    notifyStarted()
+
+
+
+                    //cloudformationStack()
+                    //wait 10 minues for stack to be up
+                    sh("sleep 10m")
+                    notifySuccessful()
+
+                }
+
+                break
+            case "dev":
+                stage('Delete mereged stacks'){
+                    sh("chmod +x ./delete_stacks.sh && ./delete_stacks.sh")
+                }
+
+                break
+            case ~/s.*/:
+                stage('Cloudformation Stack'){
+
+                    notifyStarted()
+
+
+                    cloudformationStack()
+                    //wait 10 minues for stack to be up
+                    sh("sleep 10m")
+
+                }
+                stage('Blue DNS Update'){
+
+                    updateDNS()
+                }
+                stage('Test Blue Stack'){
+
+                    //qaAutoTest()
+                    notifySuccessful()
+                }
+
+                break
+            default:
+                break
+        }
+
+        //notifySuccessful()
+
+    } catch (e) {
+        currentBuild.result = "FAILED"
+        notifyFailed()
+        throw e
+    }
+
+}
+
+def notifyStarted() {
+    // send to Slack
+    slackSend (color: '#FFFF00', channel: '#cd_notify', message: "STARTED: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' (${env.BUILD_URL})")
+}
+
+def notifySuccessful() {
+    // send to Slack
+    slackSend (color: '#00FF00', channel: '#cd_notify', message: "SUCCESSFUL: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' (${env.BUILD_URL}) . You can access at ${env.NEW_DNS}")
+    //slackSend (color: '#00FF00', channel: '#cd_notify', message: "SUCCESSFUL: Test '${env.JOB_NAME} [${env.BUILD_NUMBER}]' (${env.BUILD_URL})")
+
+}
+
+def notifyTestSuccessful() {
+    // send to Slack
+    slackSend (color: '#00FF00', channel: '#cd_notify', message: "SUCCESSFUL: Test '${env.JOB_NAME} [${env.BUILD_NUMBER}]' (${env.BUILD_URL})")
+
+}
+
+def notifyFailed() {
+    // send to Slack
+    slackSend (color: '#FF0000', channel: '#cd_notify', message: "FAILED: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' (${env.BUILD_URL})")
+    //slackSend (color: '#FF0000', channel: '#cd_notify', message: "FAILED: Test '${env.JOB_NAME} [${env.BUILD_NUMBER}]' (${env.BUILD_URL})")
+
+}
+
+def cloudformationStack(){
+
+    sh """#!/bin/bash
+ """
+
+}
+
+def buildCode(){
+    sh("echo 'build ok' ")
+}
+
+def runQA(){
+    sh("echo 'test ok' ")
+}
+
+def deployApp(){
+    sh("echo 'deploy ok' ")
+}
+
+def updateDNS(){
+
+    def changeSetTemplate="""
+    {
+        "Comment": "Jenkins Change Set - New blue Stack",
+        "Changes": [
+        {
+            "Action": "UPSERT",
+            "ResourceRecordSet": {
+                "Name": "${env.BLUE_DNS}",
+                "Type": "CNAME",
+                "AliasTarget": {
+                    "HostedZoneId": "${env.HOSTED_ZONE}",
+                    "DNSName": "${env.NEW_DNS}",
+                    "EvaluateTargetHealth": false
+                }
+            }
+        }
+        ]
+    }
+    """
+    writeFile file: "changeset.json", text: changeSetTemplate
+
+    echo 'Updating Route 53 Entries'
+    sh("aws --profile ${env.AWS_PROFILE_DEPLOY} route53 change-resource-record-sets --hosted-zone-id ${env.HOSTED_ZONE} --change-batch file://changeset.json")
+
+}
+
+def qaAutoTest(){
+
+    sh """#!/bin/bash
+
+
+
+            git clone 
+
+            mvn clean test
+
+    """
+
+}
