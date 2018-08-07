@@ -1,0 +1,25 @@
+# Deploy with:
+# serverless deploy --aws-profile deploy
+
+service: clean-unused-dbg
+
+provider:
+  name: aws
+  runtime: python3.6
+  region: us-east-1
+  stackTags:
+    cost: DevOps
+    project: DevOps
+  iamRoleStatements:
+    #ec2 actions
+    - Effect: 'Allow'
+      Action:
+        - 'ec2:*'
+      Resource: '*'
+
+functions:
+  cleanDbg:
+    handler: handler.clean_dbg
+    timeout: 120
+    events:
+      - schedule: cron(5 17 ? * 6 *)
