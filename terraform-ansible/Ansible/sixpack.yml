@@ -1,0 +1,59 @@
+---
+- name: Install sixpack
+  gather_facts: No
+  hosts: all
+
+  tasks:
+
+    - name: install the 'Development tools' package group
+      yum:
+        name: "@Development tools"
+        state: present
+      become: yes
+
+    - name: install python headers
+      yum:
+        name: "python-devel"
+        state: present
+      become: yes
+
+    - name: install sixpack
+      pip:
+        name: "{{ item.name }}"
+        state: present
+      with_items:
+      - { name: sixpack }
+      become: yes
+
+    - copy:
+        src: templates/config.yml
+        dest: /etc/sixpack.yml
+      become: yes
+
+    - copy:
+        src: templates/sixpack.service
+        dest: /etc/systemd/system/sixpack.service
+      become: yes
+
+    - copy:
+        src: templates/sixpack-web.service
+        dest: /etc/systemd/system/sixpack-web.service
+      become: yes
+
+    - name: reload systemd
+      systemd: daemon_reload=yes
+      become: yes
+
+    - name: Start sixpack
+      service:
+        name: sixpack
+        state: started
+        enabled: yes
+      become: yes
+
+    - name: Start sixpack-web
+      service:
+        name: sixpack-web
+        state: started
+        enabled: yes
+      become: yes

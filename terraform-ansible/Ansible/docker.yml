@@ -1,0 +1,60 @@
+---
+- name: Install docker
+  gather_facts: No
+  hosts: all
+
+  tasks:
+    - name: Install yum utils
+      yum:
+        name: yum-utils
+        state: latest
+      become: yes
+
+    - name: Install device-mapper-persistent-data
+      yum:
+        name: device-mapper-persistent-data
+        state: latest
+      become: yes
+
+    - name: Install lvm2
+      yum:
+        name: lvm2
+        state: latest
+      become: yes
+
+    - name: Import Docker CE repository gpg key
+      rpm_key:
+        key: https://download.docker.com/linux/centos/gpg
+        state: present
+      become: yes
+
+    - name: Add Docker CE repository
+      get_url:
+        url: https://download.docker.com/linux/centos/docker-ce.repo
+        dest: /etc/yum.repos.d/docker-ce.repo
+        force: yes
+        owner: root
+        group: root
+        mode: 0644
+      become: yes
+
+    - name: Install Docker CE
+      yum:
+        name: docker-ce
+        state: present
+        update_cache: yes
+      become: yes
+
+    - name: Start Docker service
+      service:
+        name: docker
+        state: started
+        enabled: yes
+      become: yes
+
+    - name: Add user centos to docker group
+      user:
+        name: centos
+        groups: docker
+        append: yes
+      become: yes

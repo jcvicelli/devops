@@ -1,0 +1,54 @@
+---
+- name: Install redis
+  gather_facts: No
+  hosts: all
+
+  tasks:
+
+    - name: Creates Redis volume
+      file: path=~/data state=directory
+
+    - name: Install packages
+      yum:
+        name:
+          - yum-utils
+          - wget
+        state: latest
+      become: yes
+          
+
+    - name: Download EPEL Release
+      get_url: 
+        url: http://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm 
+        dest: /home/centos/epel-release-latest-7.noarch.rpm
+
+    - name: Install EPEL Release
+      yum: 
+        name: /home/centos/epel-release-latest-7.noarch.rpm
+        state: present
+      become: yes
+
+    - name: Install pip
+      yum:
+        name: python-pip
+        state: latest
+      become: yes
+
+    - name: install certain python modules for docker
+      pip:
+        name: "{{ item.name }}"
+        state: present
+      with_items:
+      - { name: docker-py }
+      become: yes
+
+    - name: Create a redis container
+      docker_container:
+        name: sixpack-redis
+        image: redis
+        state: started
+        recreate: yes
+        exposed_ports:
+          - 6379
+        published_ports:
+          - 6379:6379

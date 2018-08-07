@@ -1,0 +1,47 @@
+---
+- name: Install newrelic
+  gather_facts: No
+  hosts: all
+
+  tasks:
+
+    - include_vars:
+        file: templates/aws_secrets.json
+        name: keys
+
+    - name: install the 'Development tools' package group
+      yum:
+        name: "@Development tools"
+        state: present
+      become: yes
+
+    - name: install python headers
+      yum:
+        name: "python-devel"
+        state: present
+      become: yes
+
+    - name: install newrelic
+      pip:
+        name: "{{ item.name }}"
+        state: present
+      with_items:
+      - { name: newrelic }
+      become: yes
+
+    - name: Generate config for sixpack.
+      command: newrelic-admin generate-config {{ keys.newrelicKey }} /var/lib/newrelic-sixpack.ini
+      become: yes
+
+    - name: Generate config for sixpack-web.
+      command: newrelic-admin generate-config {{ keys.newrelicKeyWeb }} /var/lib/newrelic-sixpack-web.ini
+      become: yes
+
+    - copy:
+        src: templates/newrelic_config_update.py
+        dest: /etc/newrelic_config_update.py
+      become: yes
+
+    - name: Update config with actual app names.
+      command: python /etc/newrelic_config_update.py
+      become: yes

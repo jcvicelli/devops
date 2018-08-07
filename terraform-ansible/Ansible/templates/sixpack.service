@@ -1,0 +1,9 @@
+[Unit]
+Description=sixpack
+After=network.target
+
+[Service]
+ExecStart=/bin/bash -c "NEW_RELIC_CONFIG_FILE=/var/lib/newrelic-sixpack.ini newrelic-admin run-program sixpack > /tmp/sixpack.log 2>&1"
+
+[Install]
+WantedBy=multi-user.target
