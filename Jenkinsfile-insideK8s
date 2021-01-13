@@ -1,0 +1,272 @@
+import org.jenkinsci.plugins.pipeline.modeldefinition.Utils
+import java.util.concurrent.TimeUnit
+
+def label = "worker-${UUID.randomUUID().toString()}"
+
+podTemplate(
+  serviceAccount: 'jenkins',label: label, containers: [
+    containerTemplate(
+      name: 'node',
+      image: 'node:14.3.0-buster',
+      command: 'cat',
+      ttyEnabled: true,
+      resourceRequestCpu: '3000m',
+      resourceRequestMemory:'4000Mi',
+      resourceLimitCpu: '3000m',
+      resourceLimitMemory:'4000Mi'
+    ),
+    containerTemplate(name: 'cicd', image: 'jean/cicd-tools:3.2.0', command: 'cat', ttyEnabled: true)
+  ],
+  volumes: [
+    hostPathVolume(mountPath: '/var/run/docker.sock', hostPath: '/var/run/docker.sock')
+  ],
+  annotations:[
+    podAnnotation(key: 'iam.amazonaws.com/role', value: 'kubernetes-admin'),
+  ],
+  imagePullSecrets: ['dockerhubpro'],
+){
+  node(label) {
+    properties([
+      disableConcurrentBuilds()
+    ])
+
+    try{
+      timestamps {
+        checkout scm
+
+        releaseName = sanitizeBranchName(env.BRANCH_NAME)
+        gitCommitHash = sh returnStdout: true, script: 'git rev-parse --short HEAD'
+        env.COMMIT_TAG = gitCommitHash.trim()
+        setPackageVersionEnv()
+
+        notifyStarted()
+
+        switch (releaseName) {
+          case ~/feature.*/:
+            if (shouldSkipCi != 0) {
+              env.AWS_ENVIRONMENT = "dev"
+
+
+              env.SERVICE_HOST = "${releaseName.replaceAll('feature-', '')}-jean.io"
+
+              String imgTagDev = "${env.COMMIT_TAG}-dev"
+
+
+              stage('Run QA'){
+                try{
+                  container('node') {
+                    runQA()
+                  }
+                }
+                catch (exc) {
+                  println "Failed to run test - ${currentBuild.fullDisplayName}"
+                  throw(exc)
+                }
+              }
+
+
+              stage('Build Code'){
+                try {
+                  container('node') {
+                    buildCode()
+                  }
+                }
+                catch (exc) {
+                  println "Failed to build code - ${currentBuild.fullDisplayName}"
+                  throw(exc)
+                }
+              }
+
+
+              stage('Build Docker'){
+                container('cicd'){
+                  buildDocker(imgTagDev)
+                }
+              }
+
+              stage('Push image to ECR'){
+                container('cicd'){
+                  pushECR(imgTagDev)
+                }
+              }
+
+              stage('Deploy'){
+                container('cicd'){
+                  helmDeploy('feature', "${releaseName}", imgTagDev)
+                  notifySuccessful()
+                }
+              }
+            }
+
+            break
+
+          case "develop":
+
+            break
+          case "master":
+
+            break
+          default:
+
+            stage('Run Tests') {
+              try{
+                container('node') {
+                  runQA()
+                }
+              }
+              catch (exc) {
+                println "Failed to run test - ${currentBuild.fullDisplayName}"
+                throw(exc)
+              }
+            }
+            break
+        }
+      }
+
+    } catch (e) {
+      currentBuild.result = "FAILED"
+
+      switch (env.BRANCH_NAME) {
+        case "develop":
+        case "master":
+          notifyFailedHighPrio()
+          break
+        default:
+          notifyFailed()
+          break
+      }
+
+      throw e
+    }
+  }
+}
+
+
+
+def getCommitSha() {
+  sh "git rev-parse HEAD > .git/current-commit"
+  return readFile(".git/current-commit").trim()
+}
+
+
+
+def installPackages(){
+  sh """#!/bin/bash
+    yarn install --ignore-engines
+  """
+}
+
+def buildCode(){
+  sh """#!/bin/bash
+    yarn build-ci --ignore-engines
+  """
+}
+
+def buildCodeStage(){
+  sh """#!/bin/bash
+    yarn build-ci --live --stage --ignore-engines
+  """
+}
+
+
+def copyFilesToS3() {
+  // copy assets to s3, except the sourcemaps
+  sh """#!/bin/bash
+    if [[ ! -e ~/.aws/config ]]; then
+        mkdir -p ~/.aws
+        touch ~/.aws/config
+    fi
+  """
+  sh """#!/bin/bash
+    echo [profile jenkins] >> ~/.aws/config
+    echo role_arn = arn:aws:iam::xxx:role/kubernetes-admin-s3 >> ~/.aws/config
+    echo credential_source = Ec2InstanceMetadata >> ~/.aws/config
+    echo region = eu-west-1 >> ~/.aws/config
+  """
+  sh('aws --profile=jenkins s3 cp .tmp s3://assets --cache-control "max-age=604800" --metadata "X-Robots-Tag=noindex" --recursive --exclude "*.map"')
+}
+
+
+
+def buildDocker(String imageTag){
+  container('cicd') {
+    withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_TOKEN']]) {
+      sh """#!/bin/bash
+        docker login -u $DOCKER_USERNAME -p $DOCKER_TOKEN
+      """
+    }
+    sh """#!/bin/bash
+      docker build --network host -t tag:${imageTag} -f Dockerfile .
+    """
+  }
+}
+
+def pushECR(String imageTag){
+  sh """#!/bin/bash
+    set -e
+    \$(aws ecr get-login --no-include-email --region eu-west-1 --registry-ids ${env.AWS_PROFILE_DEPLOY})
+
+    docker tag tag:${imageTag} ${env.AWS_PROFILE_DEPLOY}.dkr.ecr.eu-west-1.amazonaws.com/jean:${imageTag}
+    docker push ${env.AWS_PROFILE_DEPLOY}.dkr.ecr.eu-west-1.amazonaws.com/jean:${imageTag}
+  """
+}
+
+def helmDeployChart(String envIdentifier, String chartIdentifier, String imageTag){
+  sh """#!/bin/bash
+    set -e
+    helm3 upgrade --wait -i --namespace jean -f k8s/jean/values.yaml \
+      -f k8s/jean/environments/values-${envIdentifier}.yaml \
+      --set-string image.tag=${imageTag} \
+      --set name=${chartIdentifier} \
+      --set version=${env.PACKAGE_VERSION} \
+      --set environment.PROXY_HOST=${env.PROXY_HOST} \
+      --set maxReplicas=5 \
+      ${chartIdentifier} ./k8s/jean
+
+      echo Check the deployment at: https://${env.SERVICE_HOST}
+  """
+}
+
+
+
+
+def runQA(){
+  sh """
+    yarn qa
+    yarn jest --clearCache
+  """
+  updateGithubCommitStatus('Build succeeded', 'SUCCESS')
+}
+
+def sanitizeBranchName(String branch) {
+  return branch
+    .replaceAll(/[^a-zA-Z0-9]/, '-')
+    .replaceAll(/[\-]+/, '-')
+    .replaceAll(/\B[A-Z]/) { '-' + it }
+    .toLowerCase()
+}
+
+def cleanDeployments(String deploymentId){
+  configGitWithCredentialsAndFetchAll()
+  sh """#!/bin/bash
+    ./k8s/clean_${deploymentId}_deployments.sh
+  """
+}
+
+
+def notifyStarted() {
+  slackSend (channel: '#builds', color: '#FFFF00', message: "<${env.BUILD_URL}|${env.BRANCH_NAME}> deploy started")
+}
+
+def notifySuccessful() {
+
+}
+
+def notifyFailed() {
+
+}
+
+def notifyFailedHighPrio() {
+
+}
+
